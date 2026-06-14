@@ -1,172 +1,247 @@
-import streamlit as st
 import os
 from time import sleep
-from dotenv import load_dotenv
+
+import streamlit as st
 import fitz  # PyMuPDF
+from dotenv import load_dotenv
 
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
-from langchain_core.documents import Document
-from langchain_community.vectorstores import InMemoryVectorStore
-
-load_dotenv()
 import cloudinary
 import cloudinary.uploader
+
+from langchain_core.documents import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_google_genai import (
+    ChatGoogleGenerativeAI,
+    GoogleGenerativeAIEmbeddings,
+)
+from langchain_community.vectorstores import InMemoryVectorStore
+
+# -------------------------------------------------
+# Load Environment Variables
+# -------------------------------------------------
+
+load_dotenv()
 
 cloudinary.config(
     cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
     api_key=os.getenv("CLOUDINARY_API_KEY"),
     api_secret=os.getenv("CLOUDINARY_API_SECRET"),
-    secure=True
+    secure=True,
 )
 
-# Setup Gemini model
-llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.2)
+# -------------------------------------------------
+# Gemini LLM
+# -------------------------------------------------
 
-# Streamlit session state initialization
+llm = ChatGoogleGenerativeAI(
+    model="gemini-2.5-flash",
+    temperature=0.2,
+)
+
+# -------------------------------------------------
+# Session State
+# -------------------------------------------------
+
 if "vector_db" not in st.session_state:
     st.session_state.vector_db = None
+
 if "messages" not in st.session_state:
     st.session_state.messages = []
+
 if "document_uploaded" not in st.session_state:
     st.session_state.document_uploaded = False
 
-def document_process(path):
-    # 1. Open the PDF directly using PyMuPDF
-    doc_pdf = fitz.open(
-        stream=file.getvalue(),
-        filetype="pdf"
-    )
-    extracted_docs = []
-    
-    # 2. Extract plain text directly from each page instead of generating images
-    for i, page in enumerate(doc_pdf):
-        with st.spinner(f"Extracting text from page {i+1}..."):
-            # .get_text("text") extracts structural blocks cleanly from text-based PDFs
-            page_text = page.get_text("text")
-            
-        if page_text.strip():  # Only append pages that contain actual text content
-            extracted_docs.append(Document(page_content=page_text, metadata={"page": i+1}))
-
-    doc_pdf.close()
-
-    if not extracted_docs:
-        st.error("No extractable text found. Make sure this isn't a scanned image PDF.")
-        st.stop()
-
-    ## 3. Split the extracted native text into manageable context blocks
-    splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=120)
-    docs = splitter.split_documents(extracted_docs)
-    print(f"Generated {len(docs)} document chunks.")
-    print("done")
-
-    ## 4. Embedding and Vector Indexing
-    embeddings = GoogleGenerativeAIEmbeddings(model="gemini-embedding-2-preview")
-    vector_db = InMemoryVectorStore.from_documents(
-        documents=docs,
-        embedding=embeddings
-    )
-    st.session_state.vector_db = vector_db
-    st.session_state.document_uploaded = True
-
-### Main Application Layout
-st.set_page_config(page_title="Document QA Bot", layout="centered")
-st.subheader("Document RAG Chatbot - Native Text Extraction")
-
-# Initialize Cloudinary URL
 if "cloudinary_url" not in st.session_state:
     st.session_state.cloudinary_url = None
 
-if not st.session_state.document_uploaded:
+# -------------------------------------------------
+# PDF Processing
+# -------------------------------------------------
 
-    file = st.file_uploader(
-        "Select Your PDF File",
-        type=["pdf"]
+
+def document_process(uploaded_file):
+
+    pdf = fitz.open(
+        stream=uploaded_file.getvalue(),
+        filetype="pdf",
     )
 
-    if file:
+    extracted_docs = []
 
-        with st.spinner("Uploading and Processing PDF..."):
+    for page_num, page in enumerate(pdf):
 
-            temp_path = "uploaded_document.pdf"
+        text = page.get_text("text")
 
-            # Save locally
-            with open(temp_path, "wb") as f:
-                f.write(file.getvalue())
+        if text.strip():
 
-            # Upload to Cloudinary
-            upload_result = cloudinary.uploader.upload(
-                temp_path,
-                resource_type="raw",
-                folder="pdf_uploads"
+            extracted_docs.append(
+                Document(
+                    page_content=text,
+                    metadata={
+                        "page": page_num + 1,
+                    },
+                )
             )
 
-            # Save URL
-            st.session_state.cloudinary_url = upload_result["secure_url"]
+    pdf.close()
 
-            # Process PDF
-            document_process(temp_path)
+    if not extracted_docs:
 
-            # Delete local file (optional)
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
+        st.error(
+            "No text found in PDF. "
+            "If this is a scanned PDF, OCR is required."
+        )
 
-        st.success("Document uploaded and indexed successfully!")
+        st.stop()
+
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,
+        chunk_overlap=200,
+    )
+
+    docs = splitter.split_documents(extracted_docs)
+
+    embeddings = GoogleGenerativeAIEmbeddings(
+        model="gemini-embedding-2-preview"
+    )
+
+    vector_db = InMemoryVectorStore.from_documents(
+        documents=docs,
+        embedding=embeddings,
+    )
+
+    st.session_state.vector_db = vector_db
+    st.session_state.document_uploaded = True
+
+
+# -------------------------------------------------
+# UI
+# -------------------------------------------------
+
+st.set_page_config(
+    page_title="PDF Q&A Chatbot",
+    layout="centered",
+)
+
+st.title("📄 PDF Q&A RAG Chatbot")
+
+# -------------------------------------------------
+# Upload Section
+# -------------------------------------------------
+
+if not st.session_state.document_uploaded:
+
+    uploaded_file = st.file_uploader(
+        "Upload a PDF",
+        type=["pdf"],
+    )
+
+    if uploaded_file:
+
+        with st.spinner("Uploading to Cloudinary..."):
+
+            upload_result = cloudinary.uploader.upload(
+                uploaded_file.getvalue(),
+                resource_type="raw",
+                folder="pdf_uploads",
+            )
+
+        st.session_state.cloudinary_url = upload_result["secure_url"]
+
+        with st.spinner("Processing document..."):
+
+            document_process(uploaded_file)
+
+        st.success("Document uploaded successfully!")
 
         sleep(1)
 
         st.rerun()
 
-### Chat UI Interface Execution
+# -------------------------------------------------
+# Sidebar
+# -------------------------------------------------
+
 if st.sidebar.button(
-    "Reset Session & Upload New File",
-    use_container_width=True
+    "Reset Session",
+    use_container_width=True,
 ):
 
-    st.session_state.document_uploaded = False
     st.session_state.vector_db = None
     st.session_state.messages = []
+    st.session_state.document_uploaded = False
     st.session_state.cloudinary_url = None
-
-    if os.path.exists("uploaded_document.pdf"):
-        os.remove("uploaded_document.pdf")
 
     st.rerun()
 
-    # Render previous interactions
-    for oneMessage in st.session_state.messages:
-        st.chat_message(oneMessage["role"]).markdown(oneMessage["content"])
-        
-    query = st.chat_input("Ask Anything about the document...")
+# -------------------------------------------------
+# Chat Interface
+# -------------------------------------------------
+
+if (
+    st.session_state.document_uploaded
+    and st.session_state.vector_db is not None
+):
+
+    for message in st.session_state.messages:
+
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+    query = st.chat_input(
+        "Ask any questions"
+    )
+
     if query:
-        st.session_state.messages.append({"role": "user", "content": query})
-        st.chat_message("user").markdown(query)
-        
-        try:
-            # Retrieve the 4 closest matching chunks
-            documents = st.session_state.vector_db.similarity_search(query=query, k=4)
-        except Exception as e:
-            st.error(f"Error retrieving documents: {e}")
-            st.stop()
-            
-        context = ""        
+
+        st.session_state.messages.append(
+            {
+                "role": "user",
+                "content": query,
+            }
+        )
+
+        with st.chat_message("user"):
+            st.markdown(query)
+
+        documents = st.session_state.vector_db.similarity_search(
+            query=query,
+            k=4,
+        )
+
+        context = ""
+
         for doc in documents:
-            context += f"[Page {doc.metadata.get('page', 'Unknown')} Chunks]:\n" + doc.page_content + "\n\n"
-            
-        prompt = f"""You are a precise document validation assistant. Provide an accurate, contextual answer for the user's question strictly based on the provided document layout.
 
-Context:
-{context}
+            context += (
+                f"Page {doc.metadata.get('page')}:\n"
+                + doc.page_content
+                + "\n\n"
+            )
 
-Question: {query}
+        prompt = f"""
+        You are a helpful PDF assistant. Answer ONLY from the supplied context.
 
-Instructions:
-- Use only facts present in the text above. 
-- If information is missing or unclear based on context, state that explicitly.
-"""
-            
-        with st.spinner("Analyzing context..."):
-            result = llm.invoke(prompt)
-            
-        st.session_state.messages.append({"role": "ai", "content": result.content})
-        st.chat_message("ai").markdown(result.content)
+        If the answer is not available in the context,
+        say: "I couldn't find that information in the document."
+
+        Context:{context}
+
+        Question:{query}
+
+        Answer:
+        """
+
+        with st.spinner("Generating answer..."):
+
+            response = llm.invoke(prompt)
+
+        with st.chat_message("assistant"):
+            st.markdown(response.content)
+
+        st.session_state.messages.append(
+            {
+                "role": "assistant",
+                "content": response.content,
+            }
+        )
