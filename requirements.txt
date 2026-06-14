@@ -5,3 +5,4 @@ langchain-text-splitters
 dotenv
 pypdf
 PyMuPDF
+cloudinary
