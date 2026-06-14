@@ -10,6 +10,15 @@ from langchain_core.documents import Document
 from langchain_community.vectorstores import InMemoryVectorStore
 
 load_dotenv()
+import cloudinary
+import cloudinary.uploader
+
+cloudinary.config(
+    cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
+    api_key=os.getenv("CLOUDINARY_API_KEY"),
+    api_secret=os.getenv("CLOUDINARY_API_SECRET"),
+    secure=True
+)
 
 # Setup Gemini model
 llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.2)
@@ -24,7 +33,10 @@ if "document_uploaded" not in st.session_state:
 
 def document_process(path):
     # 1. Open the PDF directly using PyMuPDF
-    doc_pdf = fitz.open(path)
+    doc_pdf = fitz.open(
+        stream=file.getvalue(),
+        filetype="pdf"
+    )
     extracted_docs = []
     
     # 2. Extract plain text directly from each page instead of generating images
@@ -61,26 +73,65 @@ def document_process(path):
 st.set_page_config(page_title="Document QA Bot", layout="centered")
 st.subheader("Document RAG Chatbot - Native Text Extraction")
 
+# Initialize Cloudinary URL
+if "cloudinary_url" not in st.session_state:
+    st.session_state.cloudinary_url = None
+
 if not st.session_state.document_uploaded:
-    file = st.file_uploader(label="Select Your PDF File", type="pdf")
+
+    file = st.file_uploader(
+        "Select Your PDF File",
+        type=["pdf"]
+    )
+
     if file:
-        with open("uploaded_document.pdf", "wb") as f:
-            f.write(file.getvalue())
-        document_process("./uploaded_document.pdf")
-            
-        st.success("Document Index Generated Successfully.")
+
+        with st.spinner("Uploading and Processing PDF..."):
+
+            temp_path = "uploaded_document.pdf"
+
+            # Save locally
+            with open(temp_path, "wb") as f:
+                f.write(file.getvalue())
+
+            # Upload to Cloudinary
+            upload_result = cloudinary.uploader.upload(
+                temp_path,
+                resource_type="raw",
+                folder="pdf_uploads"
+            )
+
+            # Save URL
+            st.session_state.cloudinary_url = upload_result["secure_url"]
+
+            # Process PDF
+            document_process(temp_path)
+
+            # Delete local file (optional)
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+        st.success("Document uploaded and indexed successfully!")
+
         sleep(1)
+
         st.rerun()
 
 ### Chat UI Interface Execution
-if st.session_state.document_uploaded and st.session_state.vector_db:
-    if st.sidebar.button("Reset Session & Upload New File", use_container_width=True):
-        st.session_state.document_uploaded = False
-        st.session_state.vector_db = None
-        st.session_state.messages = []
-        if os.path.exists("uploaded_document.pdf"):
-            os.remove("uploaded_document.pdf")
-        st.rerun()
+if st.sidebar.button(
+    "Reset Session & Upload New File",
+    use_container_width=True
+):
+
+    st.session_state.document_uploaded = False
+    st.session_state.vector_db = None
+    st.session_state.messages = []
+    st.session_state.cloudinary_url = None
+
+    if os.path.exists("uploaded_document.pdf"):
+        os.remove("uploaded_document.pdf")
+
+    st.rerun()
 
     # Render previous interactions
     for oneMessage in st.session_state.messages:
