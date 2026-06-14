@@ -1,0 +1,32 @@
+# Python virtual environment
+env/
+venv/
+.venv/
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment variables
+.env
+
+# Streamlit cache
+.streamlit/
+
+# IDE files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Jupyter notebooks
+.ipynb_checkpoints/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
